@@ -170,6 +170,7 @@ process(["mnesia"]) ->
     ?STATUS_SUCCESS;
 process(["mnesia", "info"]) ->
     mnesia:info(),
+    cets_info(),
     ?STATUS_SUCCESS;
 process(["mnesia", Arg]) when is_list(Arg) ->
     case catch mnesia:system_info(list_to_atom(Arg)) of
@@ -928,3 +929,15 @@ get_dist_proto() ->
         _ -> "inet_tcp"
     end.
 
+cets_info() ->
+    Tables = cets_discovery:info(mongoose_cets_discovery),
+    cets_info(Tables).
+
+cets_info([]) ->
+    ok;
+cets_info(Tables) ->
+    ?PRINT("CETS tables:~n", []),
+    [cets_table_info(Table) || Table <- Tables].
+
+cets_table_info(#{memory := Memory, size := Size, nodes := Nodes, table := Tab}) ->
+    ?PRINT("table=~0p size=~p memory_words=~0p nodes=~0p~n", [Tab, Size, Memory, Nodes]).
