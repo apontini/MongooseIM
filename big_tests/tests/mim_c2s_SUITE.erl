@@ -21,7 +21,8 @@ all() ->
      {group, basic},
      {group, proxy_protocol},
      {group, incorrect_behaviors},
-     {group, security}
+     {group, security},
+     {group, session_replacement}
     ].
 
 groups() ->
@@ -43,6 +44,12 @@ groups() ->
        return_proper_stream_error_if_service_is_not_hidden,
        close_connection_if_service_type_is_hidden
       ]},
+     {session_replacement, [],
+      [
+       same_resource_replaces_session,
+       clean_close_of_replaced_session,
+       replaced_session_cannot_terminate
+      ]},
      {proxy_protocol, [parallel],
       [
        cannot_connect_without_proxy_header,
@@ -60,14 +67,25 @@ end_per_suite(Config) ->
     escalus_fresh:clean(),
     escalus:end_per_suite(Config).
 
+init_per_group(session_replacement, Config) ->
+    logger_ct_backend:start(),
+    init_per_group(generic, Config);
 init_per_group(GroupName, Config) ->
     rpc(mim(), mongoose_listener, start_listener, [m_listener(GroupName)]),
     Config.
 
+end_per_group(session_replacement, Config) ->
+    logger_ct_backend:stop(),
+    end_per_group(generic, Config);
 end_per_group(GroupName, _Config) ->
     rpc(mim(), mongoose_listener, stop_listener, [m_listener(GroupName)]),
     ok.
 
+init_per_testcase(replaced_session_cannot_terminate = CN, Config) ->
+    S = escalus_users:get_server(Config, alice_m),
+    OptKey = {replaced_wait_timeout, S},
+    Config1 = mongoose_helper:backup_and_set_config_option(Config, OptKey, 1),
+    escalus:init_per_testcase(CN, Config1);
 init_per_testcase(close_connection_if_service_type_is_hidden = CN, Config) ->
     Config1 = mongoose_helper:backup_and_set_config_option(Config, hide_service_name, true),
     escalus:init_per_testcase(CN, Config1);
@@ -155,6 +173,40 @@ close_connection_if_service_type_is_hidden(_Config) ->
         5000 ->
             ct:fail(connection_not_closed)
     end.
+
+same_resource_replaces_session(Config) ->
+    UserSpec = [{resource, <<"conflict">>} | escalus_fresh:create_fresh_user(Config, alice_m)],
+    {ok, Alice1, _} = escalus_connection:start(UserSpec),
+    {ok, Alice2, _} = escalus_connection:start(UserSpec),
+    ConflictError = escalus:wait_for_stanza(Alice1),
+    escalus:assert(is_stream_error, [<<"conflict">>, <<>>], ConflictError),
+    mongoose_helper:wait_until(fun() -> escalus_connection:is_connected(Alice1) end, false),
+    escalus_connection:stop(Alice2).
+
+clean_close_of_replaced_session(Config) ->
+    logger_ct_backend:capture(warning),
+    same_resource_replaces_session(Config),
+    logger_ct_backend:stop_capture(),
+    FilterFun = fun(_, Msg) ->
+                        re:run(Msg, "replaced_wait_timeout") /= nomatch
+                end,
+    [] = logger_ct_backend:recv(FilterFun).
+
+replaced_session_cannot_terminate(Config) ->
+    % GIVEN a session that is frozen and cannot terminate
+    logger_ct_backend:capture(warning),
+    UserSpec = [{resource, <<"conflict">>} | escalus_fresh:create_fresh_user(Config, alice_m)],
+    {ok, Alice1, _} = escalus_connection:start(UserSpec),
+    C2SPid = mongoose_helper:get_session_pid(Alice1),
+    ok = rpc(mim(), sys, suspend, [C2SPid]),
+    % WHEN a session gets replaced ...
+    {ok, Alice2, _} = escalus_connection:start(UserSpec),
+    % THEN a timeout warning is logged
+    FilterFun = fun(_, Msg) -> re:run(Msg, "replaced_wait_timeout") /= nomatch end,
+    mongoose_helper:wait_until(fun() -> length(logger_ct_backend:recv(FilterFun)) end, 1),
+    rpc(mim(), sys, resume, [C2SPid]),
+    logger_ct_backend:stop_capture(),
+    escalus_connection:stop(Alice2).
 
 cannot_connect_without_proxy_header(Config) ->
     UserSpec = escalus_fresh:create_fresh_user(Config, alice_m),
