@@ -26,6 +26,7 @@ groups() ->
      {basic, [parallel],
       [
        log_one,
+       log_two,
        do_starttls
       ]}
     ].
@@ -63,6 +64,14 @@ log_one(Config) ->
         escalus:assert(is_chat_message, [<<"Hi!">>], escalus_client:wait_for_stanza(MC2S)),
         escalus_client:send(MC2S, escalus_stanza:chat_to(EC2S, <<"Hi!">>)),
         escalus:assert(is_chat_message, [<<"Hi!">>], escalus_client:wait_for_stanza(EC2S))
+    end).
+
+log_two(Config) ->
+    escalus:fresh_story(Config, [{alice_m, 1}, {bob_m, 1}], fun(Alice, Bob) ->
+        escalus_client:send(Alice, escalus_stanza:chat_to(Bob, <<"Hi!">>)),
+        escalus:assert(is_chat_message, [<<"Hi!">>], escalus_client:wait_for_stanza(Bob)),
+        escalus_client:send(Bob, escalus_stanza:chat_to(Alice, <<"Hi!">>)),
+        escalus:assert(is_chat_message, [<<"Hi!">>], escalus_client:wait_for_stanza(Alice))
     end).
 
 do_starttls(Config) ->
