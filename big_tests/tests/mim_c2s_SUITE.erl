@@ -20,6 +20,7 @@ all() ->
     [
      {group, basic},
      {group, proxy_protocol},
+     {group, incorrect_behaviors}
     ].
 
 groups() ->
@@ -29,6 +30,12 @@ groups() ->
        log_one,
        log_two,
        do_starttls
+      ]},
+     {incorrect_behaviors, [parallel],
+      [
+       close_connection_if_start_stream_duplicated,
+       close_connection_if_protocol_violation_after_authentication,
+       close_connection_if_protocol_violation_after_binding
       ]},
      {proxy_protocol, [parallel],
       [
@@ -87,6 +94,25 @@ do_starttls(Config) ->
         escalus_client:send(MC2S, escalus_stanza:chat_to(EC2S, <<"Hi!">>)),
         escalus:assert(is_chat_message, [<<"Hi!">>], escalus_client:wait_for_stanza(EC2S))
     end).
+
+close_connection_if_start_stream_duplicated(Config) ->
+    close_connection_if_protocol_violation(Config, [start_stream, stream_features]).
+
+close_connection_if_protocol_violation_after_authentication(Config) ->
+    close_connection_if_protocol_violation(Config, [start_stream, stream_features, authenticate]).
+
+close_connection_if_protocol_violation_after_binding(Config) ->
+    close_connection_if_protocol_violation(Config, [start_stream, stream_features, authenticate, bind]).
+
+close_connection_if_protocol_violation(Config, Steps) ->
+    AliceSpec = escalus_fresh:create_fresh_user(Config, alice_m),
+    {ok, Alice, _Features} = escalus_connection:start(AliceSpec, Steps),
+    escalus:send(Alice, escalus_stanza:stream_start(domain(), ?NS_JABBER_CLIENT)),
+    escalus:assert(is_stream_error, [<<"policy-violation">>, <<>>],
+                   escalus_connection:get_stanza(Alice, no_stream_error_stanza_received)),
+    escalus:assert(is_stream_end,
+                   escalus_connection:get_stanza(Alice, no_stream_end_stanza_received)),
+    true = escalus_connection:wait_for_close(Alice, timer:seconds(1)).
 
 cannot_connect_without_proxy_header(Config) ->
     UserSpec = escalus_fresh:create_fresh_user(Config, alice_m),
