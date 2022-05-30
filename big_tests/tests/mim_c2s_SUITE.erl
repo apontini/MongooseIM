@@ -18,7 +18,8 @@
 
 all() ->
     [
-     {group, basic}
+     {group, basic},
+     {group, proxy_protocol},
     ].
 
 groups() ->
@@ -28,6 +29,11 @@ groups() ->
        log_one,
        log_two,
        do_starttls
+      ]},
+     {proxy_protocol, [parallel],
+      [
+       cannot_connect_without_proxy_header,
+       connect_with_proxy_header
       ]}
     ].
 
@@ -35,18 +41,18 @@ groups() ->
 %% Init & teardown
 %%--------------------------------------------------------------------
 init_per_suite(Config) ->
-    rpc(mim(), mongoose_listener, start_listener, [m_listener()]),
     escalus:init_per_suite(Config).
 
 end_per_suite(Config) ->
     escalus_fresh:clean(),
-    rpc(mim(), mongoose_listener, stop_listener, [m_listener()]),
     escalus:end_per_suite(Config).
 
-init_per_group(_, Config) ->
+init_per_group(GroupName, Config) ->
+    rpc(mim(), mongoose_listener, start_listener, [m_listener(GroupName)]),
     Config.
 
-end_per_group(_, _Config) ->
+end_per_group(GroupName, _Config) ->
+    rpc(mim(), mongoose_listener, stop_listener, [m_listener(GroupName)]),
     ok.
 
 init_per_testcase(Name, Config) ->
@@ -82,14 +88,50 @@ do_starttls(Config) ->
         escalus:assert(is_chat_message, [<<"Hi!">>], escalus_client:wait_for_stanza(EC2S))
     end).
 
+cannot_connect_without_proxy_header(Config) ->
+    UserSpec = escalus_fresh:create_fresh_user(Config, alice_m),
+    ConnResult = escalus_connection:start(UserSpec, [start_stream]),
+    ?assertMatch({error, {connection_step_failed, _, _}}, ConnResult).
+
+connect_with_proxy_header(Config) ->
+    UserSpec = escalus_fresh:create_fresh_user(Config, alice_m),
+    ConnectionSteps = [{connect_SUITE, send_proxy_header},
+                       start_stream, stream_features, authenticate, bind],
+    {ok, Conn, _Features} = escalus_connection:start(UserSpec, ConnectionSteps),
+    escalus:send(Conn, escalus_stanza:presence(<<"available">>)),
+    escalus:assert(is_presence, escalus:wait_for_stanza(Conn)),
+    % SessionInfo = mongoose_helper:get_session_info(mim(), Conn),
+    % #{src_address := IPAddr, src_port := Port} = proxy_info(),
+    % ?assertMatch({IPAddr, Port}, maps:get(ip, SessionInfo)),
+    escalus_connection:stop(Conn).
+
 %%--------------------------------------------------------------------
 %% helpers
 %%--------------------------------------------------------------------
-m_listener() ->
+m_listener(GroupName) ->
     Port = ct:get_config({hosts, mim, mc2s_port}),
-    #{port => Port,
-      ip_tuple => {0,0,0,0},
-      ip_address => "0",
-      ip_version => 4,
-      proto => tcp,
-      module => mongoose_c2s_listener}.
+    ExtraOpts = extra_listener_opts(GroupName),
+    Listener = #{port => Port,
+                 ip_tuple => {0,0,0,0},
+                 ip_address => "0",
+                 ip_version => 4,
+                 proto => tcp,
+                 proxy_protocol => false,
+                 module => mongoose_c2s_listener},
+    maps:merge(Listener, ExtraOpts).
+
+extra_listener_opts(proxy_protocol) ->
+    #{proxy_protocol => true};
+extra_listener_opts(_) ->
+    #{}.
+
+proxy_info() ->
+    #{version => 2,
+      command => proxy,
+      transport_family => ipv4,
+      transport_protocol => stream,
+      src_address => {1, 2, 3, 4},
+      src_port => 444,
+      dest_address => {192, 168, 0, 1},
+      dest_port => 443
+     }.
