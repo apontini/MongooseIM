@@ -25,7 +25,8 @@ groups() ->
     [
      {basic, [parallel],
       [
-       log_one
+       log_one,
+       do_starttls
       ]}
     ].
 
@@ -58,6 +59,14 @@ end_per_testcase(Name, Config) ->
 %%--------------------------------------------------------------------
 log_one(Config) ->
     escalus:fresh_story(Config, [{alice, 1}, {alice_m, 1}], fun(EC2S, MC2S) ->
+        escalus_client:send(EC2S, escalus_stanza:chat_to(MC2S, <<"Hi!">>)),
+        escalus:assert(is_chat_message, [<<"Hi!">>], escalus_client:wait_for_stanza(MC2S)),
+        escalus_client:send(MC2S, escalus_stanza:chat_to(EC2S, <<"Hi!">>)),
+        escalus:assert(is_chat_message, [<<"Hi!">>], escalus_client:wait_for_stanza(EC2S))
+    end).
+
+do_starttls(Config) ->
+    escalus:fresh_story(Config, [{secure_joe, 1}, {secure_joe_m, 1}], fun(EC2S, MC2S) ->
         escalus_client:send(EC2S, escalus_stanza:chat_to(MC2S, <<"Hi!">>)),
         escalus:assert(is_chat_message, [<<"Hi!">>], escalus_client:wait_for_stanza(MC2S)),
         escalus_client:send(MC2S, escalus_stanza:chat_to(EC2S, <<"Hi!">>)),
