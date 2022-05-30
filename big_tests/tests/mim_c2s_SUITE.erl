@@ -20,7 +20,8 @@ all() ->
     [
      {group, basic},
      {group, proxy_protocol},
-     {group, incorrect_behaviors}
+     {group, incorrect_behaviors},
+     {group, security}
     ].
 
 groups() ->
@@ -36,6 +37,11 @@ groups() ->
        close_connection_if_start_stream_duplicated,
        close_connection_if_protocol_violation_after_authentication,
        close_connection_if_protocol_violation_after_binding
+      ]},
+     {security, [],
+      [
+       return_proper_stream_error_if_service_is_not_hidden,
+       close_connection_if_service_type_is_hidden
       ]},
      {proxy_protocol, [parallel],
       [
@@ -62,10 +68,14 @@ end_per_group(GroupName, _Config) ->
     rpc(mim(), mongoose_listener, stop_listener, [m_listener(GroupName)]),
     ok.
 
+init_per_testcase(close_connection_if_service_type_is_hidden = CN, Config) ->
+    Config1 = mongoose_helper:backup_and_set_config_option(Config, hide_service_name, true),
+    escalus:init_per_testcase(CN, Config1);
 init_per_testcase(Name, Config) ->
     escalus:init_per_testcase(Name, Config).
 
 end_per_testcase(Name, Config) ->
+    mongoose_helper:restore_config(Config),
     escalus:end_per_testcase(Name, Config).
 
 %%--------------------------------------------------------------------
@@ -113,6 +123,38 @@ close_connection_if_protocol_violation(Config, Steps) ->
     escalus:assert(is_stream_end,
                    escalus_connection:get_stanza(Alice, no_stream_end_stanza_received)),
     true = escalus_connection:wait_for_close(Alice, timer:seconds(1)).
+
+return_proper_stream_error_if_service_is_not_hidden(_Config) ->
+    % GIVEN MongooseIM is running default configuration
+    % WHEN we send non-XMPP payload
+    % THEN the server replies with stream error xml-not-well-formed and closes the connection
+    SendMalformedDataStep = fun(Client, Features) ->
+                                    escalus_connection:send_raw(Client, <<"malformed">>),
+                                    {Client, Features}
+                            end,
+    {ok, Connection, _} = escalus_connection:start([{port, 6222}], [SendMalformedDataStep]),
+    escalus_connection:receive_stanza(Connection, #{ assert => is_stream_start }),
+    StreamErrorAssertion = {is_stream_error, [<<"xml-not-well-formed">>, <<>>]},
+    escalus_connection:receive_stanza(Connection, #{ assert => StreamErrorAssertion }),
+    %% Sometimes escalus needs a moment to report the connection as closed
+    escalus_connection:wait_for_close(Connection, 5000).
+
+close_connection_if_service_type_is_hidden(_Config) ->
+    % GIVEN the option to hide service name is enabled
+    % WHEN we send non-XMPP payload
+    % THEN connection is closed without any response from the server
+    FailIfAnyDataReturned = fun(Reply) ->
+                                    ct:fail({unexpected_data, Reply})
+                            end,
+    Connection = escalus_tcp:connect(#{port => 6222, on_reply => FailIfAnyDataReturned }),
+    Ref = monitor(process, Connection),
+    escalus_tcp:send(Connection, <<"malformed">>),
+    receive
+        {'DOWN', Ref, _, _, _} -> ok
+    after
+        5000 ->
+            ct:fail(connection_not_closed)
+    end.
 
 cannot_connect_without_proxy_header(Config) ->
     UserSpec = escalus_fresh:create_fresh_user(Config, alice_m),
