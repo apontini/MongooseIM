@@ -33,7 +33,8 @@ groups() ->
      {basic, [parallel],
       [
        log_one,
-       log_two
+       log_two,
+       too_big_stanza_rejected
       ]},
      {stream_errors, [parallel],
       [
@@ -150,6 +151,15 @@ log_two(Config) ->
         escalus_client:send(Bob, escalus_stanza:chat_to(Alice, <<"Hi!">>)),
         escalus:assert(is_chat_message, [<<"Hi!">>], escalus_client:wait_for_stanza(Alice))
     end).
+
+too_big_stanza_rejected(Config) ->
+    AliceSpec = escalus_fresh:create_fresh_user(Config, alice_m),
+    {ok, Alice, _Features} = escalus_connection:start(AliceSpec),
+    BigBody = base16:encode(crypto:strong_rand_bytes(1024)),
+    escalus_client:send(Alice, escalus_stanza:chat_to(Alice, BigBody)),
+    escalus:assert(is_stream_error, [<<"policy-violation">>, <<>>], escalus_client:wait_for_stanza(Alice)),
+    escalus:assert(is_stream_end, escalus_client:wait_for_stanza(Alice)),
+    true = escalus_connection:wait_for_close(Alice, timer:seconds(1)).
 
 do_starttls(Config) ->
     escalus:fresh_story(Config, [{secure_joe, 1}, {secure_joe_m, 1}], fun(EC2S, MC2S) ->
@@ -374,14 +384,11 @@ should_pass_with(Config, Protocol) ->
 m_listener(GroupName) ->
     Port = ct:get_config({hosts, mim, mc2s_port}),
     ExtraOpts = extra_listener_opts(GroupName),
-    Listener = #{port => Port,
-                 ip_tuple => {0,0,0,0},
-                 ip_address => "0",
-                 ip_version => 4,
-                 proto => tcp,
-                 proxy_protocol => false,
-                 module => mongoose_c2s_listener,
-                 tls => #{mode => starttls, opts => def_tls_opts()}},
+    C2S = config_parser_helper:default_config([listen, c2s]),
+    Listener = C2S#{port => Port,
+                    max_stanza_size => 1024,
+                    module => mongoose_c2s_listener,
+                    tls => #{mode => starttls, opts => def_tls_opts()}},
     maps:merge(Listener, ExtraOpts).
 
 extra_listener_opts(stricttls) ->
