@@ -8,6 +8,8 @@
 -include_lib("escalus/include/escalus_xmlns.hrl").
 -include_lib("exml/include/exml.hrl").
 -include_lib("exml/include/exml_stream.hrl").
+-define(CERT_FILE, "priv/ssl/fake_server.pem").
+-define(DH_FILE, "priv/ssl/fake_dh_server.pem").
 
 -import(distributed_helper, [mim/0, rpc/4]).
 -import(domain_helper, [host_type/0, domain/0]).
@@ -20,9 +22,10 @@ all() ->
     [
      {group, basic},
      {group, proxy_protocol},
-     {group, incorrect_behaviors},
+     {group, stream_errors},
      {group, security},
-     {group, session_replacement}
+     {group, session_replacement},
+     {group, tls}
     ].
 
 groups() ->
@@ -30,14 +33,15 @@ groups() ->
      {basic, [parallel],
       [
        log_one,
-       log_two,
-       do_starttls
+       log_two
       ]},
-     {incorrect_behaviors, [parallel],
+     {stream_errors, [parallel],
       [
-       close_connection_if_start_stream_duplicated,
-       close_connection_if_protocol_violation_after_authentication,
-       close_connection_if_protocol_violation_after_binding
+       start_stream_duplicated,
+       protocol_violation_after_authentication,
+       protocol_violation_after_binding,
+       host_unknown_error,
+       bad_xml
       ]},
      {security, [],
       [
@@ -54,7 +58,35 @@ groups() ->
       [
        cannot_connect_without_proxy_header,
        connect_with_proxy_header
-      ]}
+      ]},
+     {starttls_required, [parallel],
+      [
+       do_starttls,
+       should_fail_to_authenticate_without_starttls,
+       should_not_send_other_features_with_starttls_required,
+       auth_bind_pipelined_starttls_skipped_error
+       | protocol_test_cases()
+      ]},
+     {stricttls, [parallel],
+      [
+       no_initial_tls_fails,
+       initial_tls_does_not_get_starttls_feature
+      ]},
+     {tls, tls_groups()}
+    ].
+
+tls_groups()->
+    [
+     {group, starttls_required},
+     {group, stricttls}
+    ].
+
+protocol_test_cases() ->
+    [
+     should_fail_with_tlsv1,
+     should_fail_with_tlsv1_1,
+     should_pass_with_tlsv1_2,
+     should_pass_with_tlsv1_3
     ].
 
 %%--------------------------------------------------------------------
@@ -67,6 +99,8 @@ end_per_suite(Config) ->
     escalus_fresh:clean(),
     escalus:end_per_suite(Config).
 
+init_per_group(tls, Config) ->
+    Config;
 init_per_group(session_replacement, Config) ->
     logger_ct_backend:start(),
     init_per_group(generic, Config);
@@ -74,6 +108,8 @@ init_per_group(GroupName, Config) ->
     rpc(mim(), mongoose_listener, start_listener, [m_listener(GroupName)]),
     Config.
 
+end_per_group(tls, _Config) ->
+    ok;
 end_per_group(session_replacement, Config) ->
     logger_ct_backend:stop(),
     end_per_group(generic, Config);
@@ -123,16 +159,16 @@ do_starttls(Config) ->
         escalus:assert(is_chat_message, [<<"Hi!">>], escalus_client:wait_for_stanza(EC2S))
     end).
 
-close_connection_if_start_stream_duplicated(Config) ->
-    close_connection_if_protocol_violation(Config, [start_stream, stream_features]).
+start_stream_duplicated(Config) ->
+    protocol_violation(Config, [start_stream, stream_features]).
 
-close_connection_if_protocol_violation_after_authentication(Config) ->
-    close_connection_if_protocol_violation(Config, [start_stream, stream_features, authenticate]).
+protocol_violation_after_authentication(Config) ->
+    protocol_violation(Config, [start_stream, stream_features, authenticate]).
 
-close_connection_if_protocol_violation_after_binding(Config) ->
-    close_connection_if_protocol_violation(Config, [start_stream, stream_features, authenticate, bind]).
+protocol_violation_after_binding(Config) ->
+    protocol_violation(Config, [start_stream, stream_features, authenticate, bind]).
 
-close_connection_if_protocol_violation(Config, Steps) ->
+protocol_violation(Config, Steps) ->
     AliceSpec = escalus_fresh:create_fresh_user(Config, alice_m),
     {ok, Alice, _Features} = escalus_connection:start(AliceSpec, Steps),
     escalus:send(Alice, escalus_stanza:stream_start(domain(), ?NS_JABBER_CLIENT)),
@@ -141,6 +177,29 @@ close_connection_if_protocol_violation(Config, Steps) ->
     escalus:assert(is_stream_end,
                    escalus_connection:get_stanza(Alice, no_stream_end_stanza_received)),
     true = escalus_connection:wait_for_close(Alice, timer:seconds(1)).
+
+host_unknown_error(Config) ->
+    Spec = [{host, <<"localhost">>},
+            {server, <<"impossible_this_server_does_not_exist">>}
+            | escalus_fresh:create_fresh_user(Config, alice_m)],
+    {ok, Alice, _Features} = escalus_connection:start(Spec, [start_stream]),
+    escalus:assert(is_stream_error, [<<"host-unknown">>, <<>>],
+                   escalus_connection:get_stanza(Alice, no_stream_error_stanza_received)),
+    escalus:assert(is_stream_end,
+                   escalus_connection:get_stanza(Alice, no_stream_end_stanza_received)),
+    true = escalus_connection:wait_for_close(Alice, timer:seconds(1)).
+
+bad_xml(Config) ->
+    UserSpec = escalus_fresh:create_fresh_user(Config, alice_m),
+    ConnectionSteps = [{connect_SUITE, connect_with_bad_xml}],
+    {ok, Conn, _Features} = escalus_connection:start(UserSpec, ConnectionSteps),
+    [Start, Error, End] = escalus:wait_for_stanzas(Conn, 3),
+    %% then
+    %% See RFC 6120 4.9.1.3 (http://xmpp.org/rfcs/rfc6120.html#streams-error-rules-host).
+    %% Stream start from the server is required in this case.
+    escalus:assert(is_stream_start, Start),
+    escalus:assert(is_stream_error, [<<"xml-not-well-formed">>, <<>>], Error),
+    escalus:assert(is_stream_end, End).
 
 return_proper_stream_error_if_service_is_not_hidden(_Config) ->
     % GIVEN MongooseIM is running default configuration
@@ -158,12 +217,7 @@ return_proper_stream_error_if_service_is_not_hidden(_Config) ->
     escalus_connection:wait_for_close(Connection, 5000).
 
 close_connection_if_service_type_is_hidden(_Config) ->
-    % GIVEN the option to hide service name is enabled
-    % WHEN we send non-XMPP payload
-    % THEN connection is closed without any response from the server
-    FailIfAnyDataReturned = fun(Reply) ->
-                                    ct:fail({unexpected_data, Reply})
-                            end,
+    FailIfAnyDataReturned = fun(Reply) -> ct:fail({unexpected_data, Reply}) end,
     Connection = escalus_tcp:connect(#{port => 6222, on_reply => FailIfAnyDataReturned }),
     Ref = monitor(process, Connection),
     escalus_tcp:send(Connection, <<"malformed">>),
@@ -225,6 +279,95 @@ connect_with_proxy_header(Config) ->
     % ?assertMatch({IPAddr, Port}, maps:get(ip, SessionInfo)),
     escalus_connection:stop(Conn).
 
+should_fail_to_authenticate_without_starttls(Config) ->
+    UserSpec = escalus_fresh:create_fresh_user(Config, secure_joe_m),
+    ConnectionSteps = [start_stream, stream_features],
+    {ok, Conn, Features} = escalus_connection:start(UserSpec, ConnectionSteps),
+    try escalus_session:authenticate(Conn, Features) of
+        _ ->
+            error(authentication_without_tls_suceeded)
+    catch
+        throw:{auth_failed, User, AuthReply} ->
+            ?assert(0 < binary:longest_common_prefix([atom_to_binary(secure_joe_m, utf8), User])),
+            escalus:assert(is_stream_error, [<<"policy-violation">>,
+                                             <<"Use of STARTTLS required">>],
+                           AuthReply)
+    end.
+
+should_not_send_other_features_with_starttls_required(Config) ->
+    UserSpec = escalus_fresh:create_fresh_user(Config, secure_joe_m),
+    {ok, Conn, _} = escalus_connection:start(UserSpec, [start_stream]),
+    case escalus_connection:get_stanza(Conn, wait_for_features) of
+        #xmlel{name = <<"stream:features">>,
+               children = [#xmlel{name = <<"starttls">>,
+                                  children = [#xmlel{name = <<"required">>}]}]} ->
+            escalus_connection:stop(Conn);
+        _ -> ct:fail(?MODULE_STRING)
+    end.
+
+auth_bind_pipelined_starttls_skipped_error(Config) ->
+    UserSpec = [{parser_opts, [{start_tag, <<"stream:stream">>}]}
+                | escalus_fresh:create_fresh_user(Config, secure_joe_m)],
+    Conn = connect_SUITE:pipeline_connect(UserSpec),
+    StreamResponse = escalus_connection:get_stanza(Conn, stream_response),
+    escalus:assert(is_stream_start, StreamResponse),
+    escalus_session:stream_features(Conn, []),
+    AuthResponse = escalus_connection:get_stanza(Conn, auth_response),
+    escalus:assert(is_stream_error, [<<"policy-violation">>, <<"Use of STARTTLS required">>],
+                   AuthResponse).
+
+no_initial_tls_fails(Config) ->
+    process_flag(trap_exit, true),
+    UserSpec = [{wait_for_stream_timeout, 500} | escalus_fresh:create_fresh_user(Config, alice_m)],
+    try escalus_connection:start(UserSpec, [start_stream]) of
+        {error, _} -> ok
+    catch
+        C:R:S ->
+            ct:pal("Value ~p~n", [{C, R, S}])
+    end.
+
+initial_tls_does_not_get_starttls_feature(Config) ->
+    UserSpec = [{ssl, true}, {parser_opts, [{start_tag, <<"stream:stream">>}]}
+                | escalus_fresh:create_fresh_user(Config, alice_m)],
+    {ok, Alice, _} = escalus_connection:start(UserSpec, [start_stream]),
+    {Alice1, Features} = escalus_session:stream_features(Alice, []),
+    escalus_connection:stop(Alice1),
+    ?assertNot(proplists:get_value(starttls, Features)),
+    ok.
+
+should_fail_with_tlsv1(Config) ->
+    should_fail_with(Config, tlsv1).
+
+should_fail_with_tlsv1_1(Config) ->
+    should_fail_with(Config, 'tlsv1.1').
+
+should_fail_with(Config, Protocol) ->
+    UserSpec0 = escalus_users:get_userspec(Config, secure_joe_m),
+    UserSpec1 = [{ssl_opts, [{versions, [Protocol]}]} | UserSpec0],
+    try escalus_connection:start(UserSpec1) of
+        _ ->
+            error({client_connected, Protocol})
+    catch
+        C:R:S ->
+            ct:pal("Value ~p~n", [{C, R, S}])
+    end.
+
+should_pass_with_tlsv1_2(Config) ->
+    should_pass_with(Config, 'tlsv1.2').
+
+should_pass_with_tlsv1_3(Config) ->
+    should_pass_with(Config, 'tlsv1.3').
+
+should_pass_with(Config, Protocol) ->
+    UserSpec0 = escalus_fresh:create_fresh_user(Config, secure_joe_m),
+    UserSpec1 = [{ssl_opts, [{versions, [Protocol]}]} | UserSpec0],
+    case escalus_connection:start(UserSpec1) of
+        {ok, Conn, _Features} ->
+            escalus_connection:stop(Conn);
+        _ ->
+            ct:fail("Connection couldn't be established")
+    end.
+
 %%--------------------------------------------------------------------
 %% helpers
 %%--------------------------------------------------------------------
@@ -237,13 +380,23 @@ m_listener(GroupName) ->
                  ip_version => 4,
                  proto => tcp,
                  proxy_protocol => false,
-                 module => mongoose_c2s_listener},
+                 module => mongoose_c2s_listener,
+                 tls => #{mode => starttls, opts => def_tls_opts()}},
     maps:merge(Listener, ExtraOpts).
 
+extra_listener_opts(stricttls) ->
+    #{tls => #{mode => tls, opts => def_tls_opts()}};
+extra_listener_opts(starttls_required) ->
+    #{tls => #{mode => starttls_required, opts => def_tls_opts()}};
 extra_listener_opts(proxy_protocol) ->
     #{proxy_protocol => true};
 extra_listener_opts(_) ->
     #{}.
+
+def_tls_opts() ->
+    [{versions, ['tlsv1.2', 'tlsv1.3']},
+     {certfile, ?CERT_FILE},
+     {dhfile, ?DH_FILE}].
 
 proxy_info() ->
     #{version => 2,
