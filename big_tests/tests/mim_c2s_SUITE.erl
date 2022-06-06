@@ -47,7 +47,8 @@ groups() ->
      {security, [],
       [
        return_proper_stream_error_if_service_is_not_hidden,
-       close_connection_if_service_type_is_hidden
+       close_connection_if_service_type_is_hidden,
+       close_connection_if_no_progress_and_timeout
       ]},
      {session_replacement, [],
       [
@@ -125,6 +126,9 @@ init_per_testcase(replaced_session_cannot_terminate = CN, Config) ->
     escalus:init_per_testcase(CN, Config1);
 init_per_testcase(close_connection_if_service_type_is_hidden = CN, Config) ->
     Config1 = mongoose_helper:backup_and_set_config_option(Config, hide_service_name, true),
+    escalus:init_per_testcase(CN, Config1);
+init_per_testcase(close_connection_if_no_progress_and_timeout = CN, Config) ->
+    Config1 = mongoose_helper:backup_and_set_config_option(Config, c2s_state_timeout, 100),
     escalus:init_per_testcase(CN, Config1);
 init_per_testcase(Name, Config) ->
     escalus:init_per_testcase(Name, Config).
@@ -237,6 +241,13 @@ close_connection_if_service_type_is_hidden(_Config) ->
         5000 ->
             ct:fail(connection_not_closed)
     end.
+
+close_connection_if_no_progress_and_timeout(_Config) ->
+    AliceSpec = escalus_fresh:create_fresh_user(Config, alice_m),
+    {ok, Alice, _Features} = escalus_connection:start(AliceSpec, [start_stream, stream_features]),
+    escalus:assert(is_stream_error, [<<"connection-timeout">>, <<>>], escalus_client:wait_for_stanza(Alice)),
+    escalus:assert(is_stream_end, escalus_client:wait_for_stanza(Alice)),
+    true = escalus_connection:wait_for_close(Alice, timer:seconds(1)).
 
 same_resource_replaces_session(Config) ->
     UserSpec = [{resource, <<"conflict">>} | escalus_fresh:create_fresh_user(Config, alice_m)],
