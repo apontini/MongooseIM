@@ -95,10 +95,14 @@ protocol_test_cases() ->
 %% Init & teardown
 %%--------------------------------------------------------------------
 init_per_suite(Config) ->
-    escalus:init_per_suite(Config).
+    HostType = domain_helper:host_type(),
+    Config1 = dynamic_modules:save_modules(HostType, Config),
+    ok = dynamic_modules:ensure_modules(HostType, [{mod_c2s_presence, #{}}]),
+    escalus:init_per_suite(Config1).
 
 end_per_suite(Config) ->
     escalus_fresh:clean(),
+    dynamic_modules:restore_modules(Config),
     escalus:end_per_suite(Config).
 
 init_per_group(tls, Config) ->
@@ -242,7 +246,7 @@ close_connection_if_service_type_is_hidden(_Config) ->
             ct:fail(connection_not_closed)
     end.
 
-close_connection_if_no_progress_and_timeout(_Config) ->
+close_connection_if_no_progress_and_timeout(Config) ->
     AliceSpec = escalus_fresh:create_fresh_user(Config, alice_m),
     {ok, Alice, _Features} = escalus_connection:start(AliceSpec, [start_stream, stream_features]),
     escalus:assert(is_stream_error, [<<"connection-timeout">>, <<>>], escalus_client:wait_for_stanza(Alice)),
