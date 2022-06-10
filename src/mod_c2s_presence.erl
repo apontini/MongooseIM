@@ -17,13 +17,13 @@ stop(HostType) ->
 supported_features() ->
     [dynamic_domains].
 
--spec c2s_hooks(mongooseim:host_type()) -> gen_hook:hook_list(mongoose_c2s:handler_fn()).
+-spec c2s_hooks(mongooseim:host_type()) -> gen_hook:hook_list(mongoose_c2s:hook_fn()).
 c2s_hooks(HostType) ->
     [{user_send_presence, HostType, fun ?MODULE:user_send_presence/3, #{}, 50}].
 
--spec user_send_presence(mongoose_acc:t(), mongoose_c2s:handler_params(), map()) ->
+-spec user_send_presence(mongoose_acc:t(), mongoose_c2s:hook_params(), map()) ->
     {ok, mongoose_acc:t()}.
-user_send_presence(Acc, #{c2s := C2SState}, _Extra) ->
+user_send_presence(Acc, #{c2s_data := C2SState}, _Extra) ->
     {FromJid, ToJid, El} = mongoose_acc:packet(Acc),
     case jid:are_bare_equal(FromJid, ToJid) of
         true ->

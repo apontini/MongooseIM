@@ -38,19 +38,12 @@
          unregister_subhost/1,
          user_available_hook/2,
          user_ping_response/5,
-         user_ping_timeout/2,
          user_receive_packet/6,
          user_sent_keep_alive/2,
          user_send_packet/4,
          vcard_set/4,
          xmpp_send_element/3,
          xmpp_stanza_dropped/4]).
-
--export([user_send_packet/3,
-         user_send_message/3,
-         user_send_iq/3,
-         user_send_presence/3,
-         user_send_non_stanza/3]).
 
 -export([c2s_broadcast_recipients/4,
          c2s_filter_packet/4,
@@ -463,28 +456,19 @@ user_available_hook(Acc, JID) ->
     HostType = mongoose_acc:host_type(Acc),
     run_hook_for_host_type(user_available_hook, HostType, Acc, [JID]).
 
-%%% @doc The `user_ping_response' hook is called when a user responds to a ping.
+%%% @doc The `user_ping_response' hook is called when a user responds to a ping, or times out
 -spec user_ping_response(HostType, Acc, JID, Response, TDelta) -> Result when
     HostType :: mongooseim:host_type(),
-    Acc :: mongoose_acc:t(),
+    Acc :: simple_acc(),
     JID :: jid:jid(),
-    Response :: timeout | jlib:iq(),
+    Response :: timeout | exml:element(),
     TDelta :: non_neg_integer(),
-    Result :: mongoose_acc:t().
+    Result :: simple_acc().
 user_ping_response(HostType, Acc, JID, Response, TDelta) ->
     Params = #{jid => JID, response => Response, time_delta => TDelta},
-    Args =  [HostType, JID, Response, TDelta],
+    Args = [HostType, JID, Response, TDelta],
     ParamsWithLegacyArgs = ejabberd_hooks:add_args(Params, Args),
     run_hook_for_host_type(user_ping_response, HostType, Acc, ParamsWithLegacyArgs).
-
-%%% @doc The `user_ping_timeout' hook is called when there is a timeout
-%%% when waiting for a ping response from a user.
--spec user_ping_timeout(HostType, JID) -> Result when
-    HostType :: mongooseim:host_type(),
-    JID :: jid:jid(),
-    Result :: any().
-user_ping_timeout(HostType, JID) ->
-    run_hook_for_host_type(user_ping_timeout, HostType, ok, [JID]).
 
 -spec user_receive_packet(HostType, Acc, JID, From, To, El) -> Result when
     HostType :: binary(),
@@ -517,46 +501,6 @@ user_sent_keep_alive(HostType, JID) ->
 user_send_packet(Acc, From, To, Packet) ->
     HostType = mongoose_acc:host_type(Acc),
     run_hook_for_host_type(user_send_packet, HostType, Acc, [From, To, Packet]).
-
--spec user_send_packet(HostType, Acc, Params) -> Result when
-    HostType :: mongooseim:host_type(),
-    Acc :: mongoose_acc:t(),
-    Params :: mongoose_c2s:handler_params(),
-    Result :: mongoose_acc:t().
-user_send_packet(HostType, Acc, Params) ->
-    run_fold(user_send_packet, HostType, Acc, Params).
-
--spec user_send_message(HostType, Acc, Params) -> Result when
-    HostType :: mongooseim:host_type(),
-    Acc :: mongoose_acc:t(),
-    Params :: mongoose_c2s:handler_params(),
-    Result :: mongoose_acc:t().
-user_send_message(HostType, Acc, Params) ->
-    run_fold(user_send_message, HostType, Acc, Params).
-
--spec user_send_iq(HostType, Acc, Params) -> Result when
-    HostType :: mongooseim:host_type(),
-    Acc :: mongoose_acc:t(),
-    Params :: mongoose_c2s:handler_params(),
-    Result :: mongoose_acc:t().
-user_send_iq(HostType, Acc, Params) ->
-    run_fold(user_send_iq, HostType, Acc, Params).
-
--spec user_send_presence(HostType, Acc, Params) -> Result when
-    HostType :: mongooseim:host_type(),
-    Acc :: mongoose_acc:t(),
-    Params :: mongoose_c2s:handler_params(),
-    Result :: mongoose_acc:t().
-user_send_presence(HostType, Acc, Params) ->
-    run_fold(user_send_presence, HostType, Acc, Params).
-
--spec user_send_non_stanza(HostType, Acc, Params) -> Result when
-    HostType :: mongooseim:host_type(),
-    Acc :: mongoose_acc:t(),
-    Params :: mongoose_c2s:handler_params(),
-    Result :: mongoose_acc:t().
-user_send_non_stanza(HostType, Acc, Params) ->
-    run_fold(user_send_non_stanza, HostType, Acc, Params).
 
 %%% @doc The `vcard_set' hook is called to inform that the vcard
 %%% has been set in mod_vcard backend.
