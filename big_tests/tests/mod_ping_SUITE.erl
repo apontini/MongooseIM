@@ -69,11 +69,13 @@ ping_req_timeout() ->
     timer:seconds(2).
 
 init_per_suite(Config) ->
+    distributed_helper:rpc(distributed_helper:mim(), mongoose_listener, start_listener, [mim_c2s_SUITE:m_listener(regular)]),
     mongoose_helper:inject_module(?MODULE),
     escalus:init_per_suite(Config).
 
 end_per_suite(Config) ->
     escalus_fresh:clean(),
+    distributed_helper:rpc(distributed_helper:mim(), mongoose_listener, stop_listener, [mim_c2s_SUITE:m_listener(regular)]),
     escalus:end_per_suite(Config).
 
 init_per_group(client_ping, Config) ->
@@ -145,7 +147,7 @@ clear_pong_hook(HostType, Pid) ->
 %%--------------------------------------------------------------------
 disco(Config) ->
     escalus:fresh_story(
-      Config, [{alice, 1}],
+      Config, [{alice_m, 1}],
       fun(Alice) ->
               escalus_client:send(Alice, escalus_stanza:disco_info(domain())),
               Response = escalus_client:wait_for_stanza(Alice),
@@ -161,7 +163,7 @@ ping(ConfigIn) ->
         {[HostTypePrefix, mod_ping, ping_response_timeout],0}
     ],
     Config = [{mongoose_metrics, Metrics} | ConfigIn],
-    escalus:fresh_story(Config, [{alice, 1}],
+    escalus:fresh_story(Config, [{alice_m, 1}],
         fun(Alice) ->
                 PingReq = escalus_stanza:ping_request(Domain),
                 escalus_client:send(Alice, PingReq),
@@ -171,7 +173,7 @@ ping(ConfigIn) ->
         end).
 
 wrong_ping(Config) ->
-    escalus:fresh_story(Config, [{alice, 1}],
+    escalus:fresh_story(Config, [{alice_m, 1}],
         fun(Alice) ->
             Domain = domain(),
             IQ = escalus_stanza:iq(<<"get">>, [#xmlel{name = <<"unsupported">>,
@@ -193,7 +195,7 @@ active(ConfigIn) ->
         {[HostTypePrefix, mod_ping, ping_response_timeout],0}
     ],
     Config = [{mongoose_metrics, Metrics} | ConfigIn],
-    escalus:fresh_story(Config, [{alice, 1}],
+    escalus:fresh_story(Config, [{alice_m, 1}],
         fun(Alice) ->
                 wait_ping_interval(0.75),
                 escalus_client:send(Alice, escalus_stanza:ping_request(Domain)),
@@ -212,7 +214,7 @@ active_keep_alive(ConfigIn) ->
         {[HostTypePrefix, mod_ping, ping_response_timeout],0}
     ],
     Config = [{mongoose_metrics, Metrics} | ConfigIn],
-    escalus:fresh_story(Config, [{alice, 1}],
+    escalus:fresh_story(Config, [{alice_m, 1}],
         fun(Alice) ->
                 wait_ping_interval(0.75),
                 escalus_tcp:send(Alice#client.rcv_pid, #xmlcdata{content = "\n"}),
@@ -232,7 +234,7 @@ server_ping_pong(ConfigIn) ->
     Config = [{mongoose_metrics, Metrics} | ConfigIn],
     %% We use 5 Alices because with just 1 sample the histogram may look like it hasn't changed
     %% due to exometer histogram implementation
-    escalus:fresh_story(Config, [{alice, 5}],
+    escalus:fresh_story(Config, [{alice_m, 5}],
         fun(Alice1, Alice2, Alice3, Alice4, Alice5) ->
                 lists:foreach(fun(Alice) ->
                                       PingReq = wait_for_ping_req(Alice),
@@ -241,6 +243,13 @@ server_ping_pong(ConfigIn) ->
                               end, [Alice1, Alice2, Alice3, Alice4, Alice5]),
                 wait_for_pong_hooks(5)
         end).
+    % escalus:fresh_story(Config, [{alice_m, 1}],
+    %     fun(Alice) ->
+    %                                   PingReq = wait_for_ping_req(Alice),
+    %                                   Pong = escalus_stanza:iq_result(PingReq),
+    %                                   escalus_client:send(Alice, Pong),
+    %             wait_for_pong_hooks(1)
+    %     end).
 
 server_ping_pang(ConfigIn) ->
     HostType = domain_helper:host_type(mim),
@@ -250,7 +259,7 @@ server_ping_pang(ConfigIn) ->
         {[HostTypePrefix, mod_ping, ping_response_timeout], 1}
     ],
     Config = [{mongoose_metrics, Metrics} | ConfigIn],
-    escalus:fresh_story(Config, [{alice, 1}],
+    escalus:fresh_story(Config, [{alice_m, 1}],
         fun(Alice) ->
                 wait_for_ping_req(Alice),
                 %% do not resp to ping req

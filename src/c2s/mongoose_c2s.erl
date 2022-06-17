@@ -13,6 +13,7 @@
 
 %% utils
 -export([get_host_type/1, get_lserver/1, get_sid/1, get_jid/1, get_handler/2, filter_mechanism/1]).
+-export([c2s_stream_error/2, send_element_from_server_jid/2, maybe_retry_state/1]).
 
 -type handler_res() :: #{handlers => #{module() => term()},
                          actions => [gen_statem:action()],
@@ -157,6 +158,19 @@ handle_event(internal, #xmlel{} = El, session_established, StateData) ->
             handle_c2s_packet(StateData, El)
     end;
 
+handle_event(internal, #xmlel{} = El, FsmState, StateData = #state{host_type = HostType, lserver = LServer}) ->
+    ServerJid = jid:make_noprep(<<>>, LServer, <<>>),
+    AccParams = #{host_type => HostType, lserver => LServer, location => ?LOCATION,
+                  element => El, from_jid => ServerJid, to_jid => ServerJid},
+    Acc0 = mongoose_acc:new(AccParams),
+    Params = hook_arg(StateData, FsmState),
+    {_, Acc1} = mongoose_c2s_hooks:user_send_xmlel(HostType, Acc0, Params),
+    handle_state_after_packet(StateData, Acc1);
+
+handle_event(internal, {Name, Handler}, _, StateData) when is_atom(Name), is_function(Handler, 2) ->
+    Acc = Handler(Name, StateData),
+    handle_state_result(StateData, Acc);
+
 handle_event({timeout, activate_socket}, activate_socket, _, StateData) ->
     activate_socket(StateData),
     keep_state_and_data;
@@ -193,11 +207,11 @@ handle_event(info, replaced, _FsmState, StateData) ->
     {stop, {shutdown, replaced}};
 
 handle_event(EventType, EventContent, FsmState, StateData) ->
-    ?LOG_DEBUG(#{what => unknown_info_event, stuff => [EventType, EventContent, FsmState, StateData]}),
+    ?LOG_ERROR(#{what => unknown_info_event, stuff => [EventType, EventContent, FsmState, StateData]}),
     keep_state_and_data.
 
 terminate(Reason, FsmState, StateData) ->
-    ?LOG_DEBUG(#{what => c2s_statem_terminate, stuff => [Reason, FsmState, StateData]}),
+    ?LOG_ERROR(#{what => c2s_statem_terminate, stuff => [Reason, FsmState, StateData]}),
     close_session(StateData, FsmState, Reason),
     close_parser(StateData),
     close_socket(StateData),

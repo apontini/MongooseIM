@@ -107,7 +107,9 @@ user_send_packet_type(HostType, #xmlel{name = <<"message">>}) ->
 user_send_packet_type(HostType, #xmlel{name = <<"iq">>}) ->
     mongoose_metrics:update(HostType, xmppIqSent, 1);
 user_send_packet_type(HostType, #xmlel{name = <<"presence">>}) ->
-    mongoose_metrics:update(HostType, xmppPresenceSent, 1).
+    mongoose_metrics:update(HostType, xmppPresenceSent, 1);
+user_send_packet_type(_, _) ->
+    ok.
 
 -spec user_receive_packet(mongoose_acc:t(), jid:jid(), tuple(), tuple(), tuple()
                          ) -> mongoose_acc:t().

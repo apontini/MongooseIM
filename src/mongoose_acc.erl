@@ -42,6 +42,7 @@
          set_permanent/3,
          set_permanent/4,
          append/4,
+         merge/4,
          get_permanent_keys/1,
          get_permanent_fields/1,
          get/2,
@@ -243,6 +244,11 @@ set_permanent([{NS, K, V} | T], Acc) ->
 append(NS, Key, Val, Acc) ->
     OldVal = get(NS, Key, [], Acc),
     set(NS, Key, append(OldVal, Val), Acc).
+
+-spec merge(NS :: any(), Key :: any(), Val :: map(), Acc :: t()) -> t().
+merge(NS, Key, Val, Acc) ->
+    OldVal = get(NS, Key, #{}, Acc),
+    set(NS, Key, maps:merge(OldVal, Val), Acc).
 
 -spec get_permanent_keys(Acc :: t()) -> [ns_key()].
 get_permanent_keys(#{mongoose_acc := true, non_strippable := NonStrippable}) ->
