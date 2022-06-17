@@ -486,9 +486,15 @@ hook_arg(StateData) ->
     #{c2s => StateData, handlers => #{}}.
 
 -spec handle_incoming_stanza(state(), mongoose_acc:t()) -> maybe_ok().
-handle_incoming_stanza(StateData, Acc) ->
-    El = mongoose_acc:element(Acc),
-    send_element(StateData, El, Acc).
+handle_incoming_stanza(StateData = #state{host_type = HostType}, Acc) ->
+    case mongoose_c2s_hooks:user_receive_packet(HostType, Acc, hook_arg(StateData)) of
+        {ok, Acc1} ->
+            El = mongoose_acc:element(Acc1),
+            send_element(StateData, El, Acc1);
+        {stop, _Acc1} ->
+            ok
+    end.
+
 
 -spec maybe_route({ok | stop, mongoose_acc:t()}) -> mongoose_acc:t().
 maybe_route({ok, Acc}) ->

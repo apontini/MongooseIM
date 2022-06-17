@@ -3,6 +3,7 @@
 -type hook_result() :: {ok | stop, mongoose_acc:t()}.
 
 -export([user_send_packet/3,
+         user_receive_packet/3,
          user_send_message/3,
          user_send_iq/3,
          user_send_presence/3,
@@ -19,6 +20,18 @@ user_send_packet(HostType, Acc, Params) ->
     Args = [From, To, El],
     ParamsWithLegacyArgs = ejabberd_hooks:add_args(Params, Args),
     gen_hook:run_fold(user_send_packet, HostType, Acc, ParamsWithLegacyArgs).
+
+-spec user_receive_packet(HostType, Acc, Params) -> Result when
+    HostType :: mongooseim:host_type(),
+    Acc :: mongoose_acc:t(),
+    Params :: mongoose_c2s:handler_params(),
+    Result :: hook_result().
+user_receive_packet(HostType, Acc, #{c2s_data := C2SState} = Params) ->
+    {From, To, El} = mongoose_acc:packet(Acc),
+    Jid = mongoose_c2s:get_jid(C2SState),
+    Args = [Jid, From, To, El],
+    ParamsWithLegacyArgs = ejabberd_hooks:add_args(Params, Args),
+    gen_hook:run_fold(user_receive_packet, HostType, Acc, ParamsWithLegacyArgs).
 
 -spec user_send_message(HostType, Acc, Params) -> Result when
     HostType :: mongooseim:host_type(),
